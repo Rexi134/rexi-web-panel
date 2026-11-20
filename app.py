@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-REXI'S WEB PANEL  —  Professional Multi-User + Watchdog Engine
+REXI'S WEB PANEL  —  24/7 Professional Spammer (1 msg / 10s)
 """
 import os, re, sys, time, random, threading, hashlib, uuid
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify, session
 from instagrapi import Client
 from instagrapi.exceptions import (
     ChallengeRequired, ClientError, FeedbackRequired,
@@ -12,14 +12,7 @@ from instagrapi.exceptions import (
 
 # ─────────────────────────── CONFIG ───────────────────────────
 SECRET_KEY = "REXI_WEB_PANEL_SECRET"
-ACCESS_KEY = "Rexi_Master_Penal"
-
-# Spam Settings (Constant Speed)
-BURST_SIZE = 40           
-BURST_GAP = 0.08          
-BURST_COOLDOWN = 3.0      
-
-# Watchdog Settings
+MESSAGE_DELAY = 10.0 # Send 1 message every 10 seconds
 WATCHDOG_TIMEOUT = 30 # If stalled for 30s, force restart
 
 # ─────────────────────── DEVICE SPOOFING ──────────────────────
@@ -63,7 +56,6 @@ BASE_LINE = "{target}    Ƭᴇʀɪ Mᴀᴀ Ƙᴀ Ɓʜᴏsᴅᴀ {emoji}"
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
-# Multi-User State Store: { browser_id: state_dict }
 user_states = {}
 
 def get_state():
@@ -88,7 +80,7 @@ def add_log(st, msg):
     st["logs"].insert(0, f"[{timestamp}] {msg}")
     if len(st["logs"]) > 50: st["logs"].pop()
 
-# ─────────────────────── WATCHDOG & SPAM ENGINE ──────────────
+# ─────────────────────── WATCHDOG ────────────────────────────
 def watchdog_loop(st):
     """Monitors sessions. If one freezes, it force-restarts it."""
     while st.get("running"):
@@ -97,8 +89,9 @@ def watchdog_loop(st):
         
         now = time.time()
         for s in st["sessions"]:
-            if now < s.get("cooldown_until", 0):
-                s["last_send"] = now # Reset timer during cooldown so WDT doesn't trigger
+            # If it's in cooldown, don't bother it
+            if now < s.get("next_send_time", 0):
+                s["last_send"] = now # Reset watchdog timer so it doesn't trigger during cooldown
                 continue
                 
             if now - s.get("last_send", now) > WATCHDOG_TIMEOUT:
@@ -115,8 +108,8 @@ def watchdog_loop(st):
                 except Exception as e:
                     add_log(st, f"❌ Watchdog failed to revive @{s['username']}")
 
+# ─────────────────────── 10s SPAM LOOP ───────────────────────
 def spam_worker(st):
-    """Main Spam Loop for a specific user."""
     # Start Watchdog
     threading.Thread(target=watchdog_loop, args=(st,), daemon=True).start()
     
@@ -128,90 +121,53 @@ def spam_worker(st):
         for s in list(st["sessions"]):
             if not st["running"] or s not in st["sessions"]: break
             
-            # Skip if in cooldown
-            if time.time() < s.get("cooldown_until", 0):
+            now = time.time()
+            # Check if it's time to send
+            if now < s.get("next_send_time", 0):
                 continue
                 
             uname = s["username"]
             client = s["client"]
             
-            burst_sent = 0
-            for _ in range(BURST_SIZE):
-                if not st["running"] or s not in st["sessions"]: break
+            try:
+                emoji = random.choice(FLAG_EMOJIS)
+                msg = "\n\n".join([BASE_LINE.replace("{target}", st["target"]).replace("{emoji}", emoji) for _ in range(16)])
+                msg += "\u200b" * random.randint(1, 4)
                 
-                try:
-                    emoji = random.choice(FLAG_EMOJIS)
-                    msg = "\n\n".join([BASE_LINE.replace("{target}", st["target"]).replace("{emoji}", emoji) for _ in range(16)])
-                    msg += "\u200b" * random.randint(1, 4)
+                client.direct_send(msg, thread_ids=[int(st["thread_id"])])
+                st["total_sent"] += 1
+                s["sent"] = s.get("sent", 0) + 1
+                s["last_send"] = time.time()
+                
+                # EXACT 10 SECOND DELAY FOR THIS ACCOUNT
+                s["next_send_time"] = time.time() + MESSAGE_DELAY
+                add_log(st, f"📨 @{uname} sent msg. Next in 10s.")
+                
+            except (RateLimitError, PleaseWaitFewMinutes, FeedbackRequired, ClientError) as e:
+                err = str(e).lower()
+                if any(k in err for k in ("limit", "wait", "spam", "block", "feedback", "item_ack")):
+                    add_log(st, f"⚠️ @{uname} hit Rate Limit. Cooling 60s.")
+                    s["next_send_time"] = time.time() + 60
+                else:
+                    add_log(st, f"❌ Error on @{uname}: {err[:40]}")
+                    s["next_send_time"] = time.time() + 10
                     
-                    client.direct_send(msg, thread_ids=[int(st["thread_id"])])
-                    st["total_sent"] += 1
-                    s["sent"] = s.get("sent", 0) + 1
-                    s["last_send"] = time.time()
-                    burst_sent += 1
-                    
-                    time.sleep(BURST_GAP)
-                    
-                except (RateLimitError, PleaseWaitFewMinutes, FeedbackRequired, ClientError) as e:
-                    err = str(e).lower()
-                    if any(k in err for k in ("limit", "wait", "spam", "block", "feedback", "item_ack")):
-                        add_log(st, f"⚠️ {uname} hit Rate Limit. Cooling 60s.")
-                        s["cooldown_until"] = time.time() + 60  # Max 1 minute cooldown
-                    else:
-                        add_log(st, f"❌ Error on {uname}: {err[:40]}")
-                        s["cooldown_until"] = time.time() + 5
-                    break
-                    
-                except Exception as e:
-                    add_log(st, f"❌ Worker Error on {uname}: {str(e)[:40]}")
-                    time.sleep(5)
-                    break
+            except Exception as e:
+                add_log(st, f"❌ Worker Error on @{uname}: {str(e)[:40]}")
+                s["next_send_time"] = time.time() + 10
 
-            if burst_sent > 0:
-                time.sleep(BURST_COOLDOWN)
-            else:
-                time.sleep(1)
+        # Fast check loop to ensure timing is accurate
+        time.sleep(0.5)
 
     add_log(st, "🛑 Spam engine stopped.")
 
 def start_engine(st):
     if st.get("running"): return
     st["running"] = True
-    add_log(st, "🔥 Spam Engine Started")
+    add_log(st, "🔥 Spam Engine Started (1 msg / 10s)")
     threading.Thread(target=spam_worker, args=(st,), daemon=True).start()
 
-# ─────────────────────── HTML TEMPLATES ──────────────────────
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>REXI PANEL - Login</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style> body { font-family: 'Inter', sans-serif; background: #0b0f19; } </style>
-</head>
-<body class="text-white flex items-center justify-center h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-900 via-[#0b0f19] to-black">
-    <div class="bg-gray-800/80 backdrop-blur-md p-8 rounded-2xl shadow-[0_0_40px_rgba(59,130,246,0.1)] w-96 border border-gray-700">
-        <div class="flex justify-center mb-6">
-            <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/50">
-                <span class="text-3xl">⚡</span>
-            </div>
-        </div>
-        <h1 class="text-2xl font-bold mb-6 text-center text-white">REXI PANEL</h1>
-        {% if error %}
-        <div class="bg-red-500/20 border border-red-500 text-red-400 p-3 rounded-lg mb-4 text-sm text-center font-medium">{{ error }}</div>
-        {% endif %}
-        <form method="POST">
-            <input type="password" name="key" placeholder="Enter Master Key" class="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 text-white mb-4 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition" required>
-            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg shadow-blue-500/30 transition-all active:scale-95">Verify & Login</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
-
+# ─────────────────────── HTML TEMPLATE ───────────────────────
 PANEL_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -243,7 +199,7 @@ PANEL_HTML = """
                 </div>
                 <h1 class="text-xl font-bold text-white tracking-wide">REXI DASHBOARD</h1>
             </div>
-            <a href="/logout" class="text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500 px-4 py-2 rounded-lg text-sm font-medium transition-all">Logout</a>
+            <div class="text-xs text-gray-400 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700">24/7 Auto-Loop</div>
         </div>
 
         <!-- Dashboard Stats -->
@@ -296,7 +252,7 @@ PANEL_HTML = """
         <div class="glass p-6 rounded-2xl flex justify-between items-center mb-8 border border-gray-600/50">
             <div>
                 <h2 class="text-xl font-bold text-white">Spam Engine</h2>
-                <p class="text-sm text-gray-400">Turn ON to start sending messages</p>
+                <p class="text-sm text-gray-400">Turn ON to start sending (10s delay per msg)</p>
             </div>
             <div class="flex items-center gap-4">
                 <span id="engine_status" class="text-sm font-bold text-red-400">STOPPED</span>
@@ -423,6 +379,11 @@ PANEL_HTML = """
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({running: isRunning})
+            }).then(r => r.json()).then(res => {
+                if(res.error) {
+                    alert(res.error);
+                    document.getElementById('toggle').checked = !isRunning;
+                }
             });
         }
     </script>
@@ -431,31 +392,13 @@ PANEL_HTML = """
 """
 
 # ─────────────────────── ROUTES ──────────────────────────────
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        if request.form.get('key') == ACCESS_KEY:
-            session['logged_in'] = True
-            return redirect(url_for('index'))
-        return render_template_string(LOGIN_HTML, error="Invalid Key")
-    return render_template_string(LOGIN_HTML)
-
-@app.route('/logout')
-def logout():
-    session.pop('logged_in', None)
-    session.pop('browser_id', None)
-    return redirect(url_for('login'))
-
 @app.route('/')
 def index():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
     get_state() # Ensure state exists
     return render_template_string(PANEL_HTML)
 
 @app.route('/api/data')
 def get_data():
-    if not session.get('logged_in'): return jsonify({})
     st = get_state()
     return jsonify({
         "running": st["running"],
@@ -469,7 +412,6 @@ def get_data():
 
 @app.route('/api/add_session', methods=['POST'])
 def add_session():
-    if not session.get('logged_in'): return jsonify({"success": False, "error": "Unauthorized"})
     st = get_state()
     data = request.json
     sid = data.get('session_id', '').strip()
@@ -488,8 +430,8 @@ def add_session():
             "client": cl,
             "sent": 0,
             "last_send": time.time(),
-            "wdt_saves": 0,
-            "cooldown_until": 0
+            "next_send_time": time.time(), # Starts sending immediately
+            "wdt_saves": 0
         }
         st["sessions"].append(new_sess)
         add_log(st, f"✅ Added session @{info.username}")
@@ -500,7 +442,6 @@ def add_session():
 
 @app.route('/api/remove_session', methods=['POST'])
 def remove_session():
-    if not session.get('logged_in'): return jsonify({"success": False})
     st = get_state()
     username = request.json.get('username')
     
@@ -510,7 +451,6 @@ def remove_session():
 
 @app.route('/api/save_config', methods=['POST'])
 def save_config():
-    if not session.get('logged_in'): return jsonify({"success": False})
     st = get_state()
     data = request.json
     st["target"] = data.get('target', '')
@@ -527,7 +467,6 @@ def save_config():
 
 @app.route('/api/toggle', methods=['POST'])
 def toggle():
-    if not session.get('logged_in'): return jsonify({"success": False})
     st = get_state()
     data = request.json
     
@@ -535,7 +474,7 @@ def toggle():
         if not st["sessions"]:
             return jsonify({"success": False, "error": "No sessions added"})
         if not st["target"] or not st["thread_id"]:
-            return jsonify({"success": False, "error": "Config missing"})
+            return jsonify({"success": False, "error": "Config missing (Target or GC Link)"})
             
         start_engine(st)
     else:
@@ -546,6 +485,6 @@ def toggle():
 
 if __name__ == "__main__":
     print("[+] REXI WEB PANEL BOOTING...")
-    print(f"[+] Access Key: {ACCESS_KEY}")
+    print("[+] Login bypassed. Panel is live.")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
