@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-REXI'S WEB PANEL  —  24/7 Professional Spammer (1 msg / 10s)
+REXI'S WEB PANEL  —  24/7 Professional Spammer (Proxy + Custom Payload)
 """
 import os, re, sys, time, random, threading, hashlib, uuid
 from flask import Flask, render_template_string, request, jsonify, session
@@ -13,7 +13,8 @@ from instagrapi.exceptions import (
 # ─────────────────────────── CONFIG ───────────────────────────
 SECRET_KEY = "REXI_WEB_PANEL_SECRET"
 MESSAGE_DELAY = 10.0 # Send 1 message every 10 seconds
-WATCHDOG_TIMEOUT = 30 # If stalled for 30s, force restart
+WATCHDOG_TIMEOUT = 35 # If stalled for 35s, force restart
+DEFAULT_PROXY = "http://oqerrmdi:c1849knkbeq0@191.96.254.138:6185"
 
 # ─────────────────────── DEVICE SPOOFING ──────────────────────
 DEVICES = [
@@ -37,9 +38,11 @@ def get_uuids(seed):
 def get_ua(d):
     return (f"Instagram 269.0.0.18.75 Android ({d['android_version']}/{d['android_release']}; {d['dpi']}; {d['resolution']}; {d['manufacturer']}; {d['model']}; {d['device']}; en_US; 319244081)")
 
-def build_client(sessionid):
+def build_client(sessionid, proxy=None):
     cl = Client()
     dev = get_device(sessionid)
+    if proxy and proxy.startswith("http"):
+        cl.set_proxy(proxy)
     try:
         cl.set_device(dev)
         cl.set_uuids(get_uuids(sessionid))
@@ -50,7 +53,8 @@ def build_client(sessionid):
 
 # ─────────────────────── PAYLOADS ────────────────────────
 FLAG_EMOJIS = ["🏴‍☠️", "🇦🇨", "🇦🇩", "🇦🇪", "🇦🇫", "🇦🇬", "🇦🇮", "🇦🇱", "🇦🇲", "🇦🇴", "🇦🇶", "🇦🇷", "🇦🇸", "🇦🇹", "🇦🇺", "🇦🇼", "🇦🇽", "🇦🇿", "🇧🇦", "🇧🇧", "🇧🇩", "🇧🇪", "🇧🇫", "🇧🇬", "🇧🇭", "🇧🇮", "🇧🇯", "🇧🇱", "🇧🇲", "🇧🇳", "🇧🇴", "🇧🇶", "🇧🇷", "🇧🇸", "🇧🇹", "🇧🇻", "🇧🇼", "🇧🇾", "🇧🇿", "🇨🇦"]
-BASE_LINE = "{target}    Ƭᴇʀɪ Mᴀᴀ Ƙᴀ Ɓʜᴏsᴅᴀ {emoji}"
+
+PAYLOAD_TEMPLATE = """{e1} █▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓▒░[Rexi God]░▒▓██ ➪ {hater} 𝗖𝗨𝗗𝗔𝗜 𝗦𝗧𝗔𝗥𝗧... █████████████████████████[◈] [◈]  𝗘𝗥𝗥𝗢𝗥 𝟱𝟱 ▂▄▆█[▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░] ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿░░▒▒▒▒▓▓▓▓████▓▓▓▓▒▒▒▒░░➔ 𝘀𝘆𝘀-𝗼𝘃𝗲𝗿𝗿𝗶𝗱𝗲:███████████████████████████████[!] {hater} 𝚂𝙻𝙰𝚅𝙴 𝚁𝙴𝚇𝙸 𝙸𝚂 𝚄𝚁 𝙶𝙾𝙳 **{hater} 𝚏𝚌𝚔 𝚞 𝚋𝚝𝚌𝚑**░░▒▒▒▒▓▓▓▓████▓▓▓▓▒▒▒▒░░ {hater} 𝗧𝗠𝗞𝗖 {e1} ████████████████████████████████▓▒░ {hater} ░▒▓███▓▒░ 𝗦𝗔𝗬 ░▒▓███ █▓▒░ 𝕽ꫀ᥊ɪ 𝗗𝗔𝗗 ░▒▓███▓▒░ thread id: 0x7FFF1C░▒▓██▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█▓█ {e1}"""
 
 # ─────────────────────── FLASK APP & STATE ───────────────────
 app = Flask(__name__)
@@ -68,6 +72,7 @@ def get_state():
             "sessions": [],
             "target": "",
             "thread_id": "",
+            "proxy": DEFAULT_PROXY, # Inject proxy here
             "running": False,
             "total_sent": 0,
             "wdt_saves": 0,
@@ -82,25 +87,23 @@ def add_log(st, msg):
 
 # ─────────────────────── WATCHDOG ────────────────────────────
 def watchdog_loop(st):
-    """Monitors sessions. If one freezes, it force-restarts it."""
     while st.get("running"):
         time.sleep(5)
         if not st.get("running"): break
         
         now = time.time()
         for s in st["sessions"]:
-            # If it's in cooldown, don't bother it
             if now < s.get("next_send_time", 0):
-                s["last_send"] = now # Reset watchdog timer so it doesn't trigger during cooldown
+                s["last_send"] = now 
                 continue
                 
             if now - s.get("last_send", now) > WATCHDOG_TIMEOUT:
                 s["wdt_saves"] = s.get("wdt_saves", 0) + 1
                 st["wdt_saves"] += 1
-                add_log(st, f"🐕 Watchdog: @{s['username']} stalled. Force Restarting...")
+                add_log(st, f"🐕 Watchdog: @{s['username']} stalled. Restarting...")
                 
                 try:
-                    new_cl = build_client(s["session_id"])
+                    new_cl = build_client(s["session_id"], st["proxy"])
                     new_cl.login_by_sessionid(s["session_id"])
                     s["client"] = new_cl
                     s["last_send"] = time.time()
@@ -108,9 +111,8 @@ def watchdog_loop(st):
                 except Exception as e:
                     add_log(st, f"❌ Watchdog failed to revive @{s['username']}")
 
-# ─────────────────────── 10s SPAM LOOP ───────────────────────
+# ─────────────────────── SPAM LOOP ─────────────────
 def spam_worker(st):
-    # Start Watchdog
     threading.Thread(target=watchdog_loop, args=(st,), daemon=True).start()
     
     while st.get("running"):
@@ -122,7 +124,6 @@ def spam_worker(st):
             if not st["running"] or s not in st["sessions"]: break
             
             now = time.time()
-            # Check if it's time to send
             if now < s.get("next_send_time", 0):
                 continue
                 
@@ -131,23 +132,21 @@ def spam_worker(st):
             
             try:
                 emoji = random.choice(FLAG_EMOJIS)
-                msg = "\n\n".join([BASE_LINE.replace("{target}", st["target"]).replace("{emoji}", emoji) for _ in range(16)])
-                msg += "\u200b" * random.randint(1, 4)
+                msg = PAYLOAD_TEMPLATE.replace("{hater}", st["target"]).replace("{e1}", emoji)
                 
                 client.direct_send(msg, thread_ids=[int(st["thread_id"])])
                 st["total_sent"] += 1
                 s["sent"] = s.get("sent", 0) + 1
                 s["last_send"] = time.time()
                 
-                # EXACT 10 SECOND DELAY FOR THIS ACCOUNT
                 s["next_send_time"] = time.time() + MESSAGE_DELAY
-                add_log(st, f"📨 @{uname} sent msg. Next in 10s.")
+                add_log(st, f"📨 @{uname} sent payload. Next in 10s.")
                 
             except (RateLimitError, PleaseWaitFewMinutes, FeedbackRequired, ClientError) as e:
                 err = str(e).lower()
                 if any(k in err for k in ("limit", "wait", "spam", "block", "feedback", "item_ack")):
-                    add_log(st, f"⚠️ @{uname} hit Rate Limit. Cooling 60s.")
-                    s["next_send_time"] = time.time() + 60
+                    add_log(st, f"⚠️ @{uname} hit Rate Limit. Cooling 120s.")
+                    s["next_send_time"] = time.time() + 120
                 else:
                     add_log(st, f"❌ Error on @{uname}: {err[:40]}")
                     s["next_send_time"] = time.time() + 10
@@ -156,7 +155,6 @@ def spam_worker(st):
                 add_log(st, f"❌ Worker Error on @{uname}: {str(e)[:40]}")
                 s["next_send_time"] = time.time() + 10
 
-        # Fast check loop to ensure timing is accurate
         time.sleep(0.5)
 
     add_log(st, "🛑 Spam engine stopped.")
@@ -164,7 +162,7 @@ def spam_worker(st):
 def start_engine(st):
     if st.get("running"): return
     st["running"] = True
-    add_log(st, "🔥 Spam Engine Started (1 msg / 10s)")
+    add_log(st, "🔥 Spam Engine Started")
     threading.Thread(target=spam_worker, args=(st,), daemon=True).start()
 
 # ─────────────────────── HTML TEMPLATE ───────────────────────
@@ -182,16 +180,16 @@ PANEL_HTML = """
         .glass { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
         .toggle-checkbox:checked { right: 0; border-color: #10b981; }
         .toggle-checkbox:checked + .toggle-label { background-color: #10b981; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
     </style>
 </head>
 <body class="p-4 md:p-8 text-gray-200 min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-800 via-[#0b0f19] to-black">
     <div class="max-w-5xl mx-auto">
         
-        <!-- Header -->
+        <div class="bg-red-500/20 border border-red-500 text-red-200 p-4 rounded-xl mb-6 shadow-lg">
+            <h3 class="font-bold flex items-center gap-2"><span class="text-xl">⚠️</span> Anti-Ban Notice</h3>
+            <p class="text-sm mt-1">Proxy is pre-filled. If accounts still get banned, the proxy IP might be blacklisted. Get a fresh <b>Residential Proxy</b> and replace it in the box below.</p>
+        </div>
+
         <div class="flex justify-between items-center mb-8 glass p-4 rounded-2xl">
             <div class="flex items-center gap-3">
                 <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
@@ -199,46 +197,42 @@ PANEL_HTML = """
                 </div>
                 <h1 class="text-xl font-bold text-white tracking-wide">REXI DASHBOARD</h1>
             </div>
-            <div class="text-xs text-gray-400 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700">24/7 Auto-Loop</div>
+            <div class="text-xs text-gray-400 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700">Custom Payload (10s)</div>
         </div>
 
-        <!-- Dashboard Stats -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
             <div class="glass p-6 rounded-2xl relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition"><span class="text-6xl">📨</span></div>
                 <h3 class="text-gray-400 text-sm font-semibold mb-1">TOTAL SENT</h3>
                 <p id="total_sent" class="text-3xl font-bold text-emerald-400">0</p>
             </div>
             <div class="glass p-6 rounded-2xl relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition"><span class="text-6xl">👤</span></div>
                 <h3 class="text-gray-400 text-sm font-semibold mb-1">LIVE ACCOUNTS</h3>
                 <p id="live_accs" class="text-3xl font-bold text-blue-400">0/0</p>
             </div>
             <div class="glass p-6 rounded-2xl relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition"><span class="text-6xl">🐕</span></div>
                 <h3 class="text-gray-400 text-sm font-semibold mb-1">WDT SAVES</h3>
                 <p id="wdt_saves" class="text-3xl font-bold text-yellow-400">0</p>
             </div>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <!-- Session Management -->
             <div class="glass p-6 rounded-2xl">
                 <h2 class="text-lg font-bold mb-4 flex items-center gap-2"><span class="text-emerald-400">🔐</span> Session IDs</h2>
                 <div class="flex gap-2 mb-4">
                     <input type="text" id="sess_input" placeholder="Paste session ID here..." class="flex-1 bg-gray-900/50 border border-gray-700 rounded-lg p-3 text-white text-sm focus:outline-none focus:border-emerald-500 transition">
                     <button onclick="addSession()" class="bg-emerald-600 hover:bg-emerald-500 px-5 py-3 rounded-lg text-sm font-bold shadow-lg shadow-emerald-500/20 transition active:scale-95">Add</button>
                 </div>
-                <div id="session_list" class="space-y-2 max-h-52 overflow-y-auto pr-2">
-                    <!-- Sessions load here -->
-                </div>
+                <div id="session_list" class="space-y-2 max-h-52 overflow-y-auto pr-2"></div>
             </div>
 
-            <!-- Config -->
             <div class="glass p-6 rounded-2xl">
                 <h2 class="text-lg font-bold mb-4 flex items-center gap-2"><span class="text-blue-400">⚙️</span> Configuration</h2>
                 <div class="mb-4">
-                    <label class="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Target Name</label>
+                    <label class="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Proxy (IP:PORT or USER:PASS@IP:PORT)</label>
+                    <input type="text" id="proxy_input" placeholder="http://user:pass@ip:port" class="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 text-white text-sm focus:outline-none focus:border-blue-500 transition" onchange="saveConfig()">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Target Name (Hater)</label>
                     <input type="text" id="target_input" class="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 text-white text-sm focus:outline-none focus:border-blue-500 transition" onchange="saveConfig()">
                 </div>
                 <div>
@@ -248,11 +242,10 @@ PANEL_HTML = """
             </div>
         </div>
 
-        <!-- Master Switch -->
         <div class="glass p-6 rounded-2xl flex justify-between items-center mb-8 border border-gray-600/50">
             <div>
                 <h2 class="text-xl font-bold text-white">Spam Engine</h2>
-                <p class="text-sm text-gray-400">Turn ON to start sending (10s delay per msg)</p>
+                <p class="text-sm text-gray-400">Turn ON to start sending</p>
             </div>
             <div class="flex items-center gap-4">
                 <span id="engine_status" class="text-sm font-bold text-red-400">STOPPED</span>
@@ -263,30 +256,23 @@ PANEL_HTML = """
             </div>
         </div>
 
-        <!-- Terminal Logs -->
         <div class="glass rounded-2xl border border-gray-800 overflow-hidden">
             <div class="bg-gray-900/80 px-4 py-3 border-b border-gray-800 flex items-center gap-2">
-                <div class="w-3 h-3 rounded-full bg-red-500"></div>
-                <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
-                <div class="w-3 h-3 rounded-full bg-green-500"></div>
                 <span class="ml-2 text-xs font-mono text-gray-400">Live Logs</span>
             </div>
-            <div id="logs" class="p-4 h-64 overflow-y-auto font-mono text-xs space-y-1.5 bg-[#0a0f1c]">
-                <!-- Logs load here -->
-            </div>
+            <div id="logs" class="p-4 h-64 overflow-y-auto font-mono text-xs space-y-1.5 bg-[#0a0f1c]"></div>
         </div>
     </div>
 
     <script>
-        // Initial Data Fetch
         fetch('/api/data').then(r => r.json()).then(data => {
             document.getElementById('target_input').value = data.target;
             document.getElementById('gc_input').value = data.gc_link;
+            document.getElementById('proxy_input').value = data.proxy;
             document.getElementById('toggle').checked = data.running;
             updateUI(data);
         });
 
-        // Real-time Poll
         setInterval(() => {
             fetch('/api/data').then(r => r.json()).then(data => updateUI(data));
         }, 2000);
@@ -294,11 +280,8 @@ PANEL_HTML = """
         function updateUI(data) {
             document.getElementById('total_sent').innerText = data.total_sent;
             document.getElementById('wdt_saves').innerText = data.wdt_saves;
+            document.getElementById('live_accs').innerText = `${data.sessions.length}/${data.sessions.length}`;
             
-            const live = data.sessions.length;
-            document.getElementById('live_accs').innerText = `${live}/${live}`;
-            
-            // Update Engine Status Text
             const statusEl = document.getElementById('engine_status');
             if(data.running) {
                 statusEl.innerText = "RUNNING";
@@ -308,82 +291,51 @@ PANEL_HTML = """
                 statusEl.className = "text-sm font-bold text-red-400";
             }
             
-            // Sessions
             const sessDiv = document.getElementById('session_list');
-            sessDiv.innerHTML = '';
-            if(data.sessions.length === 0) {
-                sessDiv.innerHTML = '<div class="text-gray-500 text-sm italic text-center py-4">No sessions added yet.</div>';
-            }
+            sessDiv.innerHTML = data.sessions.length === 0 ? '<div class="text-gray-500 text-sm italic">No sessions added.</div>' : '';
             data.sessions.forEach(s => {
                 sessDiv.innerHTML += `
-                    <div class="flex justify-between items-center bg-gray-800/40 p-3 rounded-lg border border-gray-700/50 hover:bg-gray-800/80 transition group">
+                    <div class="flex justify-between items-center bg-gray-800/40 p-3 rounded-lg border border-gray-700/50">
                         <span class="font-mono text-emerald-400 font-medium">@${s}</span>
-                        <button onclick="removeSession('${s}')" class="text-gray-500 hover:text-red-400 bg-gray-700/50 hover:bg-red-500/20 p-2 rounded-md transition" title="Remove Session">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
-                    </div>
-                `;
+                        <button onclick="removeSession('${s}')" class="text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500 px-3 py-1 rounded-md transition">X</button>
+                    </div>`;
             });
             
-            // Logs
             const logDiv = document.getElementById('logs');
             logDiv.innerHTML = '';
             data.logs.forEach(log => {
-                let color = "text-gray-300";
-                if(log.includes("✅") || log.includes("🔥")) color = "text-emerald-400";
-                if(log.includes("⚠️")) color = "text-yellow-400";
-                if(log.includes("❌") || log.includes("🚨")) color = "text-red-400";
-                if(log.includes("🐕")) color = "text-blue-400";
-                logDiv.innerHTML += `<div class="${color} leading-relaxed">${log}</div>`;
+                let color = log.includes("✅") || log.includes("🔥") ? "text-emerald-400" : log.includes("⚠️") ? "text-yellow-400" : log.includes("❌") ? "text-red-400" : "text-gray-300";
+                logDiv.innerHTML += `<div class="${color}">${log}</div>`;
             });
         }
 
         function addSession() {
             const val = document.getElementById('sess_input').value.trim();
             if(!val) return;
-            document.getElementById('sess_input').value = 'Authenticating...';
-            
-            fetch('/api/add_session', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session_id: val})
-            }).then(r => r.json()).then(res => {
+            document.getElementById('sess_input').value = '...';
+            fetch('/api/add_session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: val})})
+            .then(r => r.json()).then(res => {
                 document.getElementById('sess_input').value = '';
                 if(!res.success) alert(res.error);
             });
         }
 
         function removeSession(username) {
-            if(!confirm('Are you sure you want to remove @' + username + '?')) return;
-            fetch('/api/remove_session', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username: username})
-            });
+            if(!confirm('Remove @' + username + '?')) return;
+            fetch('/api/remove_session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: username})});
         }
 
         function saveConfig() {
             const target = document.getElementById('target_input').value;
             const gc = document.getElementById('gc_input').value;
-            
-            fetch('/api/save_config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({target: target, gc_link: gc})
-            });
+            const proxy = document.getElementById('proxy_input').value;
+            fetch('/api/save_config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({target, gc_link: gc, proxy})});
         }
 
         function toggleEngine() {
-            const isRunning = document.getElementById('toggle').checked;
-            fetch('/api/toggle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({running: isRunning})
-            }).then(r => r.json()).then(res => {
-                if(res.error) {
-                    alert(res.error);
-                    document.getElementById('toggle').checked = !isRunning;
-                }
+            fetch('/api/toggle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({running: document.getElementById('toggle').checked})})
+            .then(r => r.json()).then(res => {
+                if(res.error) { alert(res.error); document.getElementById('toggle').checked = !document.getElementById('toggle').checked; }
             });
         }
     </script>
@@ -394,7 +346,7 @@ PANEL_HTML = """
 # ─────────────────────── ROUTES ──────────────────────────────
 @app.route('/')
 def index():
-    get_state() # Ensure state exists
+    get_state()
     return render_template_string(PANEL_HTML)
 
 @app.route('/api/data')
@@ -406,6 +358,7 @@ def get_data():
         "wdt_saves": st["wdt_saves"],
         "target": st["target"],
         "gc_link": st["thread_id"],
+        "proxy": st["proxy"],
         "sessions": [s["username"] for s in st["sessions"]],
         "logs": st["logs"]
     })
@@ -417,7 +370,7 @@ def add_session():
     sid = data.get('session_id', '').strip()
     
     try:
-        cl = build_client(sid)
+        cl = build_client(sid, st["proxy"])
         cl.login_by_sessionid(sid)
         info = cl.account_info()
         
@@ -430,7 +383,7 @@ def add_session():
             "client": cl,
             "sent": 0,
             "last_send": time.time(),
-            "next_send_time": time.time(), # Starts sending immediately
+            "next_send_time": time.time(),
             "wdt_saves": 0
         }
         st["sessions"].append(new_sess)
@@ -444,7 +397,6 @@ def add_session():
 def remove_session():
     st = get_state()
     username = request.json.get('username')
-    
     st["sessions"] = [s for s in st["sessions"] if s["username"] != username]
     add_log(st, f"🗑️ Removed session @{username}")
     return jsonify({"success": True})
@@ -454,8 +406,9 @@ def save_config():
     st = get_state()
     data = request.json
     st["target"] = data.get('target', '')
-    gc_link = data.get('gc_link', '')
+    st["proxy"] = data.get('proxy', '')
     
+    gc_link = data.get('gc_link', '')
     m = re.search(r"(\d{15,})", gc_link)
     if m:
         st["thread_id"] = m.group(1)
@@ -471,11 +424,8 @@ def toggle():
     data = request.json
     
     if data.get('running'):
-        if not st["sessions"]:
-            return jsonify({"success": False, "error": "No sessions added"})
-        if not st["target"] or not st["thread_id"]:
-            return jsonify({"success": False, "error": "Config missing (Target or GC Link)"})
-            
+        if not st["sessions"]: return jsonify({"success": False, "error": "No sessions added"})
+        if not st["target"] or not st["thread_id"]: return jsonify({"success": False, "error": "Config missing (Target or GC Link)"})
         start_engine(st)
     else:
         st["running"] = False
@@ -485,6 +435,5 @@ def toggle():
 
 if __name__ == "__main__":
     print("[+] REXI WEB PANEL BOOTING...")
-    print("[+] Login bypassed. Panel is live.")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
