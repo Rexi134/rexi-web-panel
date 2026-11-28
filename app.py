@@ -1,4 +1,5 @@
 import os, re, time, random, threading, hashlib, uuid
+import requests
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 from instagrapi import Client
 from instagrapi.exceptions import (
@@ -26,26 +27,36 @@ DEFAULT_PAYLOAD = """{e1} █▓█▓█▓█▓█▓█▓█▓█▓█▓
 
 FLAG_EMOJIS = ["🎗️", "💀", "🔥", "😈", "⚠️", "☠️", "🩸", "⚡", "🕷️", "💢", "🌀", "💣", "🪓", "❄️", "🤬", "👹", "👺", "😡", "🤡", "👿", "🖤", "❤️‍🔥", "💔", "🗡️", "🔪", "⛓️", "🕸️", "🌑", "🌪️", "🌋", "💥", "☄️", "🌩️"]
 
-# ─────────────────────── STATE ───────────────────────
-state = {
-    "sessions": {}, 
-    "proxy": "http://oqerrmdi:c1849knkbeq0@191.96.254.138:6185", 
-    "target": "",
-    "gc_link": "",
-    "thread_id": "",
-    "delay": 10.0,
-    "payload": DEFAULT_PAYLOAD,
-    "running": False,
-    "total_sent": 0,
-    "wdt_saves": 0,
-    "logs": []
-}
+# ─────────────────────── MULTI-USER STATE ───────────────────────
+# Stores state per browser session
+user_states = {}
 
-def add_log(msg, log_type="OK"):
+def get_state():
+    if 'browser_id' not in session:
+        session['browser_id'] = str(uuid.uuid4())
+    
+    bid = session['browser_id']
+    if bid not in user_states:
+        user_states[bid] = {
+            "sessions": {}, 
+            "proxy": "http://oqerrmdi:c1849knkbeq0@191.96.254.138:6185", 
+            "target": "",
+            "gc_link": "",
+            "thread_id": "",
+            "delay": 10.0,
+            "payload": DEFAULT_PAYLOAD,
+            "running": False,
+            "total_sent": 0,
+            "wdt_saves": 0,
+            "logs": []
+        }
+    return user_states[bid]
+
+def add_log(st, msg, log_type="OK"):
     timestamp = time.strftime("%H:%M:%S")
-    state["logs"].insert(0, {"time": timestamp, "type": log_type, "msg": msg})
-    if len(state["logs"]) > 100:
-        state["logs"].pop()
+    st["logs"].insert(0, {"time": timestamp, "type": log_type, "msg": msg})
+    if len(st["logs"]) > 100:
+        st["logs"].pop()
 
 # ─────────────────────── DEVICE SPOOFING ──────────────────────
 DEVICES = [
@@ -66,14 +77,14 @@ def build_client(sessionid, proxy=None):
     return cl
 
 # ─────────────────────── WORKER ─────────────────────
-def account_worker(uname):
+def account_worker(st, uname):
     fail_count = 0
     
-    while state["running"]:
-        if uname not in state["sessions"]:
+    while st["running"]:
+        if uname not in st["sessions"]:
             break
             
-        s = state["sessions"][uname]
+        s = st["sessions"][uname]
         now = time.time()
         
         if now < s["next_send"]:
@@ -82,47 +93,52 @@ def account_worker(uname):
             
         try:
             emoji = random.choice(FLAG_EMOJIS)
-            # Send Spam
-            msg = state["payload"].replace("{hater}", state["target"]).replace("{e1}", emoji)
-            s["client"].direct_send(msg, thread_ids=[int(state["thread_id"])])
+            msg = st["payload"].replace("{hater}", st["target"]).replace("{e1}", emoji)
             
-            state["total_sent"] += 1
+            # Send Message
+            s["client"].direct_send(msg, thread_ids=[int(st["thread_id"])])
+            
+            st["total_sent"] += 1
             s["sent"] += 1
-            s["next_send"] = time.time() + state["delay"]
+            s["next_send"] = time.time() + st["delay"]
             
-            add_log(f"@{uname} sent payload. Next in {int(state['delay'])}s.", "OK")
+            add_log(st, f"@{uname} sent payload. Next in {int(st['delay'])}s.", "OK")
             fail_count = 0
             
-            # NC Logic (15% chance)
+            # NC Logic
             if random.random() < 0.15: 
                 nc_emoji = random.choice(FLAG_EMOJIS)
-                nc_title = f"{state['target']} तेरी बहन की चूत || {nc_emoji} ||"
-                add_log(f"@{uname} NC Lock Reconnecting...", "ERR")
+                nc_title = f"{st['target']} तेरी बहन की चूत || {nc_emoji} ||"
+                add_log(st, f"@{uname} NC Lock Reconnecting...", "ERR")
                 try:
-                    s["client"].direct_thread_update_title(int(state["thread_id"]), nc_title)
-                    add_log(f"@{uname} NC SUCCESS", "OK")
+                    s["client"].direct_thread_update_title(int(st["thread_id"]), nc_title)
+                    add_log(st, f"@{uname} NC SUCCESS", "OK")
                 except Exception:
-                    add_log(f"@{uname} NC Failed.", "WARN")
+                    add_log(st, f"@{uname} NC Failed.", "WARN")
             
         except RateLimitError:
             fail_count += 1
             cooldown = min(60 * fail_count, 600) 
-            add_log(f"@{uname} hit Rate Limit. Cooling {cooldown}s.", "WARN")
+            add_log(st, f"@{uname} hit Rate Limit. Cooling {cooldown}s.", "WARN")
             s["next_send"] = time.time() + cooldown
         except (PleaseWaitFewMinutes, FeedbackRequired):
             fail_count += 1
             cooldown = min(120 * fail_count, 900)
-            add_log(f"@{uname} flagged by IG. Cooling {cooldown}s.", "ERR")
+            add_log(st, f"@{uname} flagged by IG. Cooling {cooldown}s.", "ERR")
             s["next_send"] = time.time() + cooldown
+        except requests.exceptions.ProxyError:
+            add_log(st, f"@{uname} Proxy is dead. Fix proxy or remove session.", "ERR")
+            time.sleep(20)
+            fail_count += 1
         except Exception as e:
             fail_count += 1
             if fail_count > 5:
-                add_log(f"@{uname} Proxy/Network Failure. Pausing.", "ERR")
+                add_log(st, f"@{uname} Network Failure. Pausing.", "ERR")
                 s["next_send"] = time.time() + 30
                 fail_count = 0
             time.sleep(2)
 
-    add_log("Spam engine stopped.", "ERR")
+    add_log(st, "Spam engine stopped.", "ERR")
 
 # ─────────────────────── FLASK ROUTES ────────────────────────
 @app.route('/login', methods=['GET', 'POST'])
@@ -137,6 +153,7 @@ def login():
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
+    session.pop('browser_id', None)
     return redirect(url_for('login'))
 
 @app.route('/')
@@ -146,38 +163,47 @@ def index():
 
 @app.route('/api/state')
 @login_required
-def get_state():
-    safe_sessions = {k: {"sent": v["sent"], "wdt_saves": v["wdt_saves"]} for k, v in state["sessions"].items()}
+def get_api_state():
+    st = get_state()
+    safe_sessions = {k: {"sent": v["sent"], "wdt_saves": v["wdt_saves"]} for k, v in st["sessions"].items()}
     return jsonify({
         "sessions": safe_sessions,
-        "proxy": state["proxy"],
-        "target": state["target"],
-        "gc_link": state["gc_link"],
-        "delay": state["delay"],
-        "payload": state["payload"],
-        "running": state["running"],
-        "total_sent": state["total_sent"],
-        "wdt_saves": state["wdt_saves"],
-        "logs": state["logs"]
+        "proxy": st["proxy"],
+        "target": st["target"],
+        "gc_link": st["gc_link"],
+        "delay": st["delay"],
+        "payload": st["payload"],
+        "running": st["running"],
+        "total_sent": st["total_sent"],
+        "wdt_saves": st["wdt_saves"],
+        "logs": st["logs"]
     })
 
 @app.route('/api/add_session', methods=['POST'])
 @login_required
 def add_session():
+    st = get_state()
     sid = request.json.get("session_id", "").strip()
     if not sid: return jsonify({"success": False, "error": "Empty session"})
     
     try:
-        cl = build_client(sid, state["proxy"])
+        # First, test if the proxy is even alive
+        if st["proxy"]:
+            try:
+                requests.get("http://api.ipify.org", proxies={"http": st["proxy"], "https": st["proxy"]}, timeout=10)
+            except Exception:
+                return jsonify({"success": False, "error": "Proxy is dead. Please provide a working proxy."})
+        
+        cl = build_client(sid, st["proxy"])
         cl.login_by_sessionid(sid)
         info = cl.account_info()
         uname = info.username
         
-        if uname in state["sessions"]:
+        if uname in st["sessions"]:
             return jsonify({"success": False, "error": "Session already added"})
             
-        state["sessions"][uname] = {"client": cl, "sid": sid, "sent": 0, "wdt_saves": 0, "next_send": 0}
-        add_log(f"Added session @{uname}", "OK")
+        st["sessions"][uname] = {"client": cl, "sid": sid, "sent": 0, "wdt_saves": 0, "next_send": 0}
+        add_log(st, f"Added session @{uname}", "OK")
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)[:60]})
@@ -185,57 +211,61 @@ def add_session():
 @app.route('/api/remove_session', methods=['POST'])
 @login_required
 def remove_session():
+    st = get_state()
     uname = request.json.get("username")
-    if uname in state["sessions"]:
-        del state["sessions"][uname]
-        add_log(f"Removed session @{uname}", "WARN")
+    if uname in st["sessions"]:
+        del st["sessions"][uname]
+        add_log(st, f"Removed session @{uname}", "WARN")
     return jsonify({"success": True})
 
 @app.route('/api/save_config', methods=['POST'])
 @login_required
 def save_config():
+    st = get_state()
     data = request.json
-    state["proxy"] = data.get("proxy", "")
-    state["target"] = data.get("target", "")
-    state["gc_link"] = data.get("gc_link", "")
-    state["delay"] = float(data.get("delay", 10.0))
-    state["payload"] = data.get("payload", DEFAULT_PAYLOAD)
+    st["proxy"] = data.get("proxy", "")
+    st["target"] = data.get("target", "")
+    st["gc_link"] = data.get("gc_link", "")
+    st["delay"] = float(data.get("delay", 10.0))
+    st["payload"] = data.get("payload", DEFAULT_PAYLOAD)
     
-    m = re.search(r"(\d{15,})", state["gc_link"])
-    if m: state["thread_id"] = m.group(1)
-    else: state["thread_id"] = ""
+    m = re.search(r"(\d{15,})", st["gc_link"])
+    if m: st["thread_id"] = m.group(1)
+    else: st["thread_id"] = ""
     
     if "payload" in data:
-        add_log(f"Custom payload updated ({len(state['payload'])} chars)", "OK")
+        add_log(st, f"Custom payload updated ({len(st['payload'])} chars)", "OK")
     elif "gc_link" in data and m:
-        add_log(f"GC Link set: {state['thread_id']}", "OK")
+        add_log(st, f"GC Link set: {st['thread_id']}", "OK")
         
     return jsonify({"success": True})
 
 @app.route('/api/toggle', methods=['POST'])
 @login_required
 def toggle():
+    st = get_state()
     data = request.json
     
     if data.get("running"):
-        if not state["sessions"]: return jsonify({"success": False, "error": "No sessions added"})
-        if not state["target"] or not state["thread_id"]: return jsonify({"success": False, "error": "Config missing"})
+        if not st["sessions"]: return jsonify({"success": False, "error": "No sessions added"})
+        if not st["target"] or not st["thread_id"]: return jsonify({"success": False, "error": "Config missing"})
         
-        state["running"] = True
-        add_log("Spam Engine Started", "OK")
+        st["running"] = True
+        add_log(st, "Spam Engine Started", "OK")
         
-        for uname in state["sessions"].keys():
-            threading.Thread(target=account_worker, args=(uname,), daemon=True).start()
+        for uname in st["sessions"].keys():
+            threading.Thread(target=account_worker, args=(st, uname), daemon=True).start()
     else:
-        state["running"] = False
-        add_log("Spam Engine Stopped", "ERR")
+        st["running"] = False
+        add_log(st, "Spam Engine Stopped", "ERR")
         
     return jsonify({"success": True})
 
 @app.route('/api/clear_logs', methods=['POST'])
 @login_required
 def clear_logs():
-    state["logs"] = []
+    st = get_state()
+    st["logs"] = []
     return jsonify({"success": True})
 
 # ─────────────────────── LOGIN TEMPLATE ───────────────────────
@@ -306,7 +336,7 @@ HTML_TEMPLATE = """
         <!-- Top Nav -->
         <div class="flex justify-between items-center mb-2">
             <div class="text-lg font-bold flex items-center gap-2">
-                Rexi Panel <span class="text-[10px] bg-slate-900 text-white px-2 py-0.5 rounded-full">v2.0</span>
+                Rexi Panel <span class="text-[10px] bg-slate-900 text-white px-2 py-0.5 rounded-full">v2.1</span>
             </div>
             <a href="/logout" class="text-xs font-bold text-red-500 hover:text-red-700 bg-red-50 px-3 py-1.5 rounded-lg transition">Logout</a>
         </div>
@@ -564,7 +594,7 @@ HTML_TEMPLATE = """
         function addSession() {
             const val = document.getElementById('session_input').value.trim();
             if(!val) return;
-            document.getElementById('session_input').value = '...';
+            document.getElementById('session_input').value = 'Authenticating...';
             fetch('/api/add_session', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({session_id: val})
